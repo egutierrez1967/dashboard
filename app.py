@@ -251,7 +251,7 @@ categorias = {
     "💱 Divisas": ["UUP", "FXE", "FXY", "FXB"],
     "📊 Indicadores Macro": ["^TNX", "^VIX", "TIP", "^IRX"],
     "🦄 Crypto": ["BTC-USD", "ETH-USD", "COIN"],
-    "🎯 Mag 7": ["AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA"],
+    "🎯 Mag 7": ["QQQ","AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA"],
     "🇨🇳 China": ["MCHI", "FXI", "ASHR", "BABA", "JD"],
     "🇪🇺 Europa": ["EZU", "VGK", "IEUR"],
     "🇯🇵 Japón": ["EWJ", "DXJ", "IEFA"],
