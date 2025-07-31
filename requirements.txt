@@ -1,0 +1,8 @@
+# requirements.txt
+
+streamlit
+yfinance
+pandas
+plotly
+numpy
+scipy
