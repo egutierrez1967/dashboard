@@ -1,565 +1,498 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 import numpy as np
-from scipy.stats import zscore
-import warnings
-warnings.filterwarnings('ignore')
 
-# --- Configuración de página ---
-st.set_page_config(layout="wide", page_title="🧠 Dashboard Macro Inteligente Pro", page_icon="🌍")
-st.title("🧠 Dashboard Macro Inteligente Pro: Análisis Avanzado")
-
-# --- Funciones auxiliares mejoradas ---
-@st.cache_data(ttl=3600)
-def cargar_datos_avanzado(tickers_tuple, start, end):
-    """Carga datos con mejor manejo de errores y validación"""
-    if not tickers_tuple:
-        return pd.DataFrame(), {}
-    
-    tickers = list(tickers_tuple)
-    datos_exitosos = {}
-    datos_fallidos = {}
-    
-    for ticker in tickers:
-        try:
-            # Descargar datos con diferentes parámetros
-            data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True, 
-                             threads=False, group_by='ticker')
-            
-            if data.empty:
-                datos_fallidos[ticker] = "No hay datos disponibles para el período"
-                continue
-            
-            # Debug: mostrar estructura de columnas
-            # st.write(f"DEBUG {ticker}: Columnas = {data.columns.tolist()}")
-            
-            precio_serie = None
-            
-            # Estrategia 1: Buscar 'Close' directamente
-            if 'Close' in data.columns:
-                precio_serie = data['Close']
-            
-            # Estrategia 2: Si hay MultiIndex, buscar Close en el segundo nivel
-            elif isinstance(data.columns, pd.MultiIndex):
-                if 'Close' in data.columns.get_level_values(1):
-                    close_data = data.xs('Close', level=1, axis=1)
-                    if isinstance(close_data, pd.DataFrame) and close_data.shape[1] == 1:
-                        precio_serie = close_data.iloc[:, 0]
-                    elif isinstance(close_data, pd.Series):
-                        precio_serie = close_data
-                    else:
-                        precio_serie = close_data
-            
-            # Estrategia 3: Buscar columnas que contengan 'close' (case insensitive)
-            elif any('close' in col.lower() for col in data.columns):
-                close_cols = [col for col in data.columns if 'close' in col.lower()]
-                precio_serie = data[close_cols[0]]
-            
-            # Estrategia 4: Si solo hay una columna, usar esa
-            elif len(data.columns) == 1:
-                precio_serie = data.iloc[:, 0]
-            
-            # Estrategia 5: Buscar columnas típicas de precio
-            else:
-                columnas_precio = ['Adj Close', 'Price', 'Last', 'Value']
-                for col_name in columnas_precio:
-                    if col_name in data.columns:
-                        precio_serie = data[col_name]
-                        break
-            
-            # Verificar si encontramos datos válidos
-            if precio_serie is not None and len(precio_serie) > 0:
-                # Asegurar que sea una Serie
-                if isinstance(precio_serie, pd.DataFrame):
-                    if precio_serie.shape[1] == 1:
-                        precio_serie = precio_serie.iloc[:, 0]
-                    else:
-                        precio_serie = precio_serie.iloc[:, -1]  # Tomar la última columna
-                
-                # Convertir a numérico y limpiar
-                precio_serie = pd.to_numeric(precio_serie, errors='coerce')
-                precio_serie = precio_serie.dropna()
-                
-                if len(precio_serie) > 0:
-                    datos_exitosos[ticker] = precio_serie
-                else:
-                    datos_fallidos[ticker] = "Datos de precio vacíos después de limpieza"
-            else:
-                datos_fallidos[ticker] = f"No se encontró columna de precio. Columnas disponibles: {data.columns.tolist()}"
-            
-        except Exception as e:
-            datos_fallidos[ticker] = f"Error descargando: {str(e)}"
-    
-    # Crear DataFrame con datos exitosos
-    if datos_exitosos:
-        try:
-            # Alinear todas las series por fecha
-            df_final = pd.DataFrame(datos_exitosos)
-            df_final = df_final.dropna(how='all')
-            
-            if not df_final.empty:
-                return df_final, datos_fallidos
-            else:
-                return pd.DataFrame(), {**datos_fallidos, "DataFrame_Final": "DataFrame vacío después de limpieza"}
-                
-        except Exception as e:
-            return pd.DataFrame(), {**datos_fallidos, "DataFrame_Error": f"Error creando DataFrame: {str(e)}"}
-    else:
-        return pd.DataFrame(), datos_fallidos
-
-def calcular_metricas_avanzadas(data):
-    """Calcula métricas avanzadas de riesgo y rendimiento"""
-    metricas = []
-    
-    for col in data.columns:
-        serie = data[col].dropna()
-        if len(serie) < 30:  # Mínimo 30 observaciones
-            continue
-            
-        returns = serie.pct_change().dropna()
-        
-        # Métricas básicas
-        retorno_total = (serie.iloc[-1] / serie.iloc[0] - 1) * 100
-        retorno_anual = ((serie.iloc[-1] / serie.iloc[0]) ** (252 / len(serie)) - 1) * 100
-        volatilidad = returns.std() * (252**0.5) * 100
-        
-        # Métricas avanzadas
-        sharpe = (retorno_anual - 2) / volatilidad if volatilidad != 0 else 0
-        max_drawdown = calcular_max_drawdown(serie)
-        var_95 = np.percentile(returns, 5) * 100  # Value at Risk 95%
-        skewness = returns.skew()
-        kurtosis = returns.kurtosis()
-        
-        # Calmar ratio (retorno anual / max drawdown)
-        calmar = retorno_anual / abs(max_drawdown) if max_drawdown != 0 else 0
-        
-        metricas.append({
-            "Activo": col,
-            "Retorno Total (%)": round(retorno_total, 2),
-            "Retorno Anual (%)": round(retorno_anual, 2),
-            "Volatilidad (%)": round(volatilidad, 2),
-            "Sharpe": round(sharpe, 2),
-            "Max Drawdown (%)": round(max_drawdown, 2),
-            "VaR 95% (%)": round(var_95, 2),
-            "Calmar": round(calmar, 2),
-            "Skewness": round(skewness, 2),
-            "Kurtosis": round(kurtosis, 2)
-        })
-    
-    return pd.DataFrame(metricas)
-
-def calcular_max_drawdown(serie):
-    """Calcula el máximo drawdown de una serie de precios"""
-    peak = serie.expanding().max()
-    drawdown = (serie - peak) / peak * 100
-    return drawdown.min()
-
-def detectar_anomalias(data, ventana=30, threshold=2.5):
-    """Detecta anomalías usando Z-score móvil"""
-    anomalias = {}
-    
-    for col in data.columns:
-        serie = data[col].dropna()
-        returns = serie.pct_change().dropna()
-        
-        # Z-score móvil
-        rolling_mean = returns.rolling(window=ventana).mean()
-        rolling_std = returns.rolling(window=ventana).std()
-        z_scores = (returns - rolling_mean) / rolling_std
-        
-        # Detectar anomalías
-        anomalias_idx = np.where(np.abs(z_scores) > threshold)[0]
-        if len(anomalias_idx) > 0:
-            anomalias[col] = {
-                'fechas': returns.iloc[anomalias_idx].index.tolist(),
-                'valores': returns.iloc[anomalias_idx].values.tolist(),
-                'z_scores': z_scores.iloc[anomalias_idx].values.tolist()
-            }
-    
-    return anomalias
-
-def analisis_regimenes(data, ventana=60):
-    """Análisis de regímenes de volatilidad"""
-    regimenes = {}
-    
-    for col in data.columns:
-        serie = data[col].dropna()
-        returns = serie.pct_change().dropna()
-        
-        # Volatilidad móvil
-        vol_movil = returns.rolling(window=ventana).std() * (252**0.5) * 100
-        
-        # Definir regímenes basados en percentiles
-        low_vol = vol_movil.quantile(0.33)
-        high_vol = vol_movil.quantile(0.67)
-        
-        regimen = pd.Series(index=vol_movil.index, dtype='object')
-        regimen[vol_movil <= low_vol] = 'Baja Volatilidad'
-        regimen[(vol_movil > low_vol) & (vol_movil <= high_vol)] = 'Volatilidad Media'
-        regimen[vol_movil > high_vol] = 'Alta Volatilidad'
-        
-        regimenes[col] = {
-            'volatilidad': vol_movil,
-            'regimen': regimen,
-            'actual': regimen.iloc[-1] if not regimen.empty else 'N/A'
-        }
-    
-    return regimenes
-
-# --- Debug: Función para diagnosticar estructura de datos ---
-def diagnosticar_ticker(ticker, start, end):
-    """Función para diagnosticar la estructura de datos de un ticker"""
-    try:
-        data = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
-        st.write(f"**{ticker}:**")
-        st.write(f"- Shape: {data.shape}")
-        st.write(f"- Columnas: {data.columns.tolist()}")
-        st.write(f"- Tipo de columnas: {type(data.columns)}")
-        if isinstance(data.columns, pd.MultiIndex):
-            st.write(f"- Niveles: {data.columns.nlevels}")
-            st.write(f"- Nivel 0: {data.columns.get_level_values(0).unique().tolist()}")
-            st.write(f"- Nivel 1: {data.columns.get_level_values(1).unique().tolist()}")
-        st.write(f"- Primeras 3 filas:")
-        st.dataframe(data.head(3))
-        st.write("---")
-    except Exception as e:
-        st.write(f"**{ticker}**: Error - {e}")
-
-# Agregar botón de diagnóstico en sidebar
-if st.sidebar.button("🔍 Diagnosticar tickers problemáticos"):
-    st.subheader("🔍 Diagnóstico de Tickers")
-    tickers_problema = ["SPY", "QQQ", "TLT", "GLD", "SLV"]
-    for ticker in tickers_problema:
-        diagnosticar_ticker(ticker, fecha_inicio, fecha_fin)
-
-# --- Categorías macroeconómicas mejoradas ---
-categorias = {
-    "🏦 Bonos EE.UU.": ["TLT", "IEF", "SHY", "GOVT"],
-    "🌍 Bonos Emergentes": ["EMB", "PCY", "VWOB"],
-    "📈 Acciones EE.UU.": ["SPY", "QQQ", "IWM", "DIA"],
-    "🌏 Acciones Internacionales": ["VEA", "VWO", "IEFA"],
-    "🌱 Commodities Agrícolas": ["DBA", "SOIL", "CORN", "WEAT"],
-    "⛽ Energía": ["USO", "XLE", "UNG", "ICLN"],
-    "🪙 Metales Preciosos": ["GLD", "SLV", "PPLT", "PDBC"],
-    "🔩 Metales Industriales": ["COPX", "JJN", "REMX"],
-    "🏠 Real Estate": ["VNQ", "SCHH", "REM"],
-    "💱 Divisas": ["UUP", "FXE", "FXY", "FXB"],
-    "📊 Indicadores Macro": ["^TNX", "^VIX", "TIP", "^IRX"],
-    "🦄 Crypto": ["BTC-USD", "ETH-USD", "COIN"],
-    "🎯 Mag 7": ["QQQ","AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA"],
-    "🇨🇳 China": ["MCHI", "FXI", "ASHR", "BABA", "JD"],
-    "🇪🇺 Europa": ["EZU", "VGK", "IEUR"],
-    "🇯🇵 Japón": ["EWJ", "DXJ", "IEFA"],
-}
-
-# --- Sidebar: Configuración mejorada ---
-st.sidebar.header("🔧 Configuración Avanzada")
-
-# Selector de análisis
-tipo_analisis = st.sidebar.selectbox(
-    "🎯 Tipo de Análisis",
-    [
-        "Dashboard Completo",
-        "Análisis de Riesgo",
-        "Detección de Anomalías",
-        "Análisis de Correlaciones",
-        "Regímenes de Volatilidad",
-        "Comparativa Sectorial"
-    ]
+# Configuración de la página
+st.set_page_config(
+    page_title="Comparativa Acciones vs Índices",
+    page_icon="📈",
+    layout="wide"
 )
 
-# Botón para limpiar todo y usar solo tickers manuales
-modo_limpiar = st.sidebar.checkbox("🧹 Modo manual: solo tickers propios", value=False)
+# Título principal
+st.title("📈 Dashboard Comparativa Acciones vs Índices")
+st.markdown("---")
 
-if modo_limpiar:
-    st.sidebar.info("✅ Modo manual activado")
-    with st.sidebar.expander("✏️ Ingresá tus tickers"):
-        tickers_manual_input = st.text_input(
-            "Tickers (ej: AAPL, TSLA, BTC-USD)",
-            value="SPY,QQQ,TLT,GLD"
-        )
-    tickers_seleccionados = [t.strip().upper() for t in tickers_manual_input.split(",") if t.strip()]
-else:
-    # Selector múltiple mejorado
-    with st.sidebar.expander("🔍 Seleccionar categorías", expanded=True):
-        seleccionadas = st.multiselect(
-            "Categorías de activos",
-            options=list(categorias.keys()),
-            default=["🏦 Bonos EE.UU.", "📈 Acciones EE.UU.", "🪙 Metales Preciosos"]
-        )
-    
-    tickers_seleccionados = sum([categorias[cat] for cat in seleccionadas], [])
-    
-    with st.sidebar.expander("✏️ Tickers adicionales"):
-        tickers_manual_input = st.text_input("Agregar más", "")
-        if tickers_manual_input:
-            tickers_manual_list = [t.strip().upper() for t in tickers_manual_input.split(",") if t.strip()]
-            tickers_seleccionados += tickers_manual_list
+# Función para obtener el nombre de la empresa
+@st.cache_data(ttl=86400)  # Cache por 24 horas
+def get_company_name(symbol):
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        return info.get('longName', info.get('shortName', symbol))
+    except:
+        return symbol
 
-# --- Parámetros avanzados ---
-with st.sidebar.expander("⚙️ Parámetros Avanzados"):
-    ventana_volatilidad = st.slider("Ventana para volatilidad móvil", 10, 120, 30)
-    threshold_anomalias = st.slider("Umbral detección anomalías (Z-score)", 1.5, 4.0, 2.5)
-    incluir_fines_semana = st.checkbox("Incluir fines de semana", False)
+# Datos de los índices y sus empresas con cobertura completa del mercado
+indices_data = {
+    "S&P 500": {
+        "symbol": "^GSPC",
+        "stocks": [
+            "MSFT", "AAPL", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "BRK-B", "LLY", "JPM",
+            "AVGO", "TSLA", "V", "XOM", "UNH", "MA", "JNJ", "HD", "PG", "COST"
+        ]
+    },
+    "Nasdaq Composite": {
+        "symbol": "^IXIC",
+        "stocks": [
+            "MSFT", "AAPL", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO", "TSLA", "COST",
+            "PEP", "ADBE", "NFLX", "AMD", "TMUS", "CSCO", "QCOM", "AMGN", "CMCSA", "ISRG"
+        ]
+    },
+    "Dow Jones": {
+        "symbol": "^DJI",
+        "stocks": [
+            "UNH", "GS", "MSFT", "CAT", "HD", "AMGN", "CRM", "MCD", "V", "JNJ",
+            "TRV", "JPM", "AXP", "HON", "PG", "IBM", "AAPL", "CVX", "BA", "MRK"
+        ]
+    },
+    "Russell 2000": {
+        "symbol": "^RUT",
+        "stocks": [
+            "SMCI", "MSTR", "CVNA", "AFRM", "PLTR", "CELH", "VST", "APP", "ELF", "GTLB",
+            "KRYS", "WFRD", "TOL", "LNW", "FIX", "CHRD", "ENSG", "JBL", "CNM", "FN"
+        ]
+    },
+    "Tecnología (XLK)": {
+        "symbol": "XLK",
+        "stocks": [
+            "MSFT", "AAPL", "NVDA", "AVGO", "CRM", "ORCL", "ADBE", "NOW", "INTU", "IBM",
+            "TXN", "QCOM", "AMD", "MU", "INTC", "ADI", "LRCX", "KLAC", "CDNS", "SNPS"
+        ]
+    },
+    "Financiero (XLF)": {
+        "symbol": "XLF",
+        "stocks": [
+            "BRK-B", "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "SPGI", "BLK",
+            "C", "AXP", "SCHW", "CB", "MMC", "ICE", "PGR", "AON", "USB", "TFC"
+        ]
+    },
+    "Energético (XLE)": {
+        "symbol": "XLE",
+        "stocks": [
+            "XOM", "CVX", "COP", "EOG", "SLB", "PSX", "MPC", "VLO", "OXY", "BKR",
+            "KMI", "WMB", "OKE", "HES", "DVN", "FANG", "APA", "EQT", "COG", "MRO"
+        ]
+    },
+    "Salud (XLV)": {
+        "symbol": "XLV",
+        "stocks": [
+            "LLY", "UNH", "JNJ", "ABBV", "MRK", "PFE", "TMO", "ABT", "ISRG", "DHR",
+            "BSX", "AMGN", "SYK", "MDT", "GILD", "BDX", "REGN", "VRTX", "ELV", "CI"
+        ]
+    },
+    "Industriales (XLI)": {
+        "symbol": "XLI",
+        "stocks": [
+            "CAT", "RTX", "HON", "UPS", "LMT", "BA", "DE", "GE", "ADP", "MMM",
+            "TDG", "NOC", "EMR", "ETN", "ITW", "PH", "WM", "GD", "RSG", "NSC"
+        ]
+    },
+    "Consumo Discrecional (XLY)": {
+        "symbol": "XLY",
+        "stocks": [
+            "TSLA", "AMZN", "HD", "MCD", "NKE", "LOW", "SBUX", "TJX", "BKNG", "CMG",
+            "ORLY", "AZO", "ROST", "YUM", "GM", "F", "MAR", "HLT", "ABNB", "MGM"
+        ]
+    },
+    "Consumo Básico (XLP)": {
+        "symbol": "XLP",
+        "stocks": [
+            "PG", "COST", "WMT", "PEP", "KO", "PM", "MO", "MDLZ", "CL", "GIS",
+            "KMB", "SYY", "KHC", "CHD", "K", "HSY", "MKC", "CAG", "CPB", "HRL"
+        ]
+    },
+    "Servicios Públicos (XLU)": {
+        "symbol": "XLU",
+        "stocks": [
+            "NEE", "SO", "DUK", "CEG", "SRE", "AEP", "VST", "D", "PCG", "PEG",
+            "EXC", "XEL", "ED", "ETR", "AWK", "ES", "FE", "EIX", "PPL", "CMS"
+        ]
+    },
+    "Bienes Raíces (XLRE)": {
+        "symbol": "XLRE",
+        "stocks": [
+            "PLD", "AMT", "CCI", "EQIX", "PSA", "O", "WELL", "DLR", "EXR", "BXP",
+            "SBAC", "VTR", "ARE", "MAA", "EQR", "INVH", "ESS", "KIM", "REG", "UDR"
+        ]
+    },
+    "Materiales (XLB)": {
+        "symbol": "XLB",
+        "stocks": [
+            "LIN", "SHW", "APD", "FCX", "ECL", "NUE", "NEM", "DOW", "VMC", "MLM",
+            "PPG", "CTVA", "DD", "IFF", "PKG", "IP", "CF", "ALB", "MOS", "FMC"
+        ]
+    }
+}
 
-# --- Fechas ---
-with st.sidebar.expander("📅 Rango de fechas"):
-    fecha_fin = st.date_input("Fecha final", value=date.today())
+# Sidebar para controles
+st.sidebar.header("🔧 Configuración")
+
+# Selección de índice (radio buttons)
+selected_index = st.sidebar.radio(
+    "Selecciona un Índice:",
+    list(indices_data.keys())
+)
+
+# Selección de período (radio buttons)
+period_options = {
+    "24 meses": 24,
+    "12 meses": 12,
+    "6 meses": 6,
+    "3 meses": 3
+}
+
+selected_period_text = st.sidebar.radio(
+    "Selecciona el Período:",
+    list(period_options.keys())
+)
+
+selected_period = period_options[selected_period_text]
+
+# Botón procesar
+process_button = st.sidebar.button("🚀 Procesar", type="primary")
+
+# Función para obtener datos de Yahoo Finance
+@st.cache_data(ttl=3600)  # Cache por 1 hora
+def get_stock_data(symbol, months):
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=months * 30)
+       
+        ticker = yf.Ticker(symbol)
+        data = ticker.history(start=start_date, end=end_date)
+       
+        if data.empty:
+            return None
+           
+        # Calcular rendimiento base 100
+        data['Rendimiento_Base100'] = (data['Close'] / data['Close'].iloc[0]) * 100
+        return data
+    except Exception as e:
+        st.error(f"Error obteniendo datos para {symbol}: {str(e)}")
+        return None
+
+# Función para normalizar datos a base 100
+def normalize_to_base100(data):
+    if data is None or data.empty:
+        return None
+    return (data['Close'] / data['Close'].iloc[0]) * 100
+
+# Inicializar estado de sesión para mantener los datos
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
+
+# Procesamiento cuando se presiona el botón
+if process_button:
+    st.markdown(f"## 📊 Análisis: {selected_index} - {selected_period_text}")
+   
+    with st.spinner(f"Obteniendo datos de {selected_index} y sus empresas..."):
+        # Obtener datos del índice
+        index_symbol = indices_data[selected_index]["symbol"]
+        index_data = get_stock_data(index_symbol, selected_period)
+       
+        if index_data is None:
+            st.error(f"No se pudieron obtener datos del índice {selected_index}")
+            st.stop()
+       
+        # Obtener datos de las acciones
+        stocks_data = {}
+        stocks_performance = {}
+        company_names = {}
+       
+        progress_bar = st.progress(0)
+        total_stocks = len(indices_data[selected_index]["stocks"])
+       
+        for i, stock in enumerate(indices_data[selected_index]["stocks"]):
+            stock_data = get_stock_data(stock, selected_period)
+            if stock_data is not None:
+                stocks_data[stock] = stock_data
+                # Obtener nombre de la empresa
+                company_names[stock] = get_company_name(stock)
+                # Calcular rendimiento final
+                initial_price = stock_data['Close'].iloc[0]
+                final_price = stock_data['Close'].iloc[-1]
+                stocks_performance[stock] = ((final_price / initial_price) * 100) - 100
+           
+            progress_bar.progress((i + 1) / total_stocks)
+       
+        progress_bar.empty()
+       
+        # Calcular rendimiento del índice
+        index_initial = index_data['Close'].iloc[0]
+        index_final = index_data['Close'].iloc[-1]
+        index_performance = ((index_final / index_initial) * 100) - 100
+        
+        # Guardar datos en el estado de sesión
+        st.session_state.index_data = index_data
+        st.session_state.stocks_data = stocks_data
+        st.session_state.stocks_performance = stocks_performance
+        st.session_state.company_names = company_names
+        st.session_state.index_performance = index_performance
+        st.session_state.selected_index = selected_index
+        st.session_state.selected_period_text = selected_period_text
+        st.session_state.data_loaded = True
+
+# Mostrar gráfico y controles si los datos están cargados
+if st.session_state.data_loaded:
+    # Recuperar datos del estado de sesión
+    index_data = st.session_state.index_data
+    stocks_data = st.session_state.stocks_data
+    stocks_performance = st.session_state.stocks_performance
+    company_names = st.session_state.company_names
+    index_performance = st.session_state.index_performance
+    selected_index = st.session_state.selected_index
+    selected_period_text = st.session_state.selected_period_text
+       
+    # CONTROLES INTERACTIVOS DEL GRÁFICO
+    st.markdown("### 🎛️ Controles del Gráfico")
     
-    # Opciones rápidas de periodo
-    periodo_rapido = st.selectbox(
-        "Periodo rápido",
-        ["Personalizado", "1 mes", "3 meses", "6 meses", "1 año", "2 años", "5 años"]
-    )
+    # Crear controles en columnas
+    ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
     
-    if periodo_rapido != "Personalizado":
-        dias = {"1 mes": 30, "3 meses": 90, "6 meses": 180, "1 año": 365, "2 años": 730, "5 años": 1825}
-        fecha_inicio = fecha_fin - timedelta(days=dias[periodo_rapido])
+    with ctrl_col1:
+        show_index = st.checkbox("📊 Mostrar Índice", value=True)
+    
+    with ctrl_col2:
+        show_above = st.checkbox("🟢 Mostrar Superiores", value=True)
+    
+    with ctrl_col3:
+        show_below = st.checkbox("🔴 Mostrar Inferiores", value=True)
+        
+    with ctrl_col4:
+        if st.button("🔄 Mostrar Todas"):
+            show_index = True
+            show_above = True
+            show_below = True
+    
+    # GRÁFICO INTERACTIVO
+    # Crear el gráfico
+    fig = go.Figure()
+    
+    # Preparar datos normalizados del índice
+    index_normalized = normalize_to_base100(index_data)
+   
+    # Añadir línea del índice solo si está seleccionado
+    if show_index:
+        fig.add_trace(go.Scatter(
+            x=index_data.index,
+            y=index_normalized,
+            mode='lines',
+            name=f'{selected_index} (Índice)',
+            line=dict(color='black', width=4, dash='dash'),
+            hovertemplate=f'<b>{selected_index}</b><br>Fecha: %{{x}}<br>Base 100: %{{y:.2f}}<extra></extra>'
+        ))
+   
+    # Preparar colores para las acciones
+    colors_above = ['darkgreen', 'green', 'lime', 'forestgreen', 'mediumseagreen', 'springgreen', 'limegreen', 'lightgreen', 'palegreen', 'darkseagreen']
+    colors_below = ['darkred', 'red', 'crimson', 'firebrick', 'indianred', 'lightcoral', 'salmon', 'darksalmon', 'orange', 'darkorange']
+    
+    color_above_idx = 0
+    color_below_idx = 0
+   
+    # Añadir líneas de las acciones según los filtros
+    for stock, data in stocks_data.items():
+        if data is not None:
+            stock_performance = stocks_performance.get(stock, 0)
+            is_above_index = stock_performance > index_performance
+            
+            # Decidir si mostrar esta línea
+            should_show = False
+            if is_above_index and show_above:
+                should_show = True
+                color = colors_above[color_above_idx % len(colors_above)]
+                color_above_idx += 1
+            elif not is_above_index and show_below:
+                should_show = True
+                color = colors_below[color_below_idx % len(colors_below)]
+                color_below_idx += 1
+            
+            if should_show:
+                stock_normalized = normalize_to_base100(data)
+                company_name = company_names.get(stock, stock)
+                display_name = f"{stock} - {company_name}"
+                
+                # Agregar emoji según rendimiento
+                perf_emoji = "🟢" if is_above_index else "🔴"
+                display_name_with_emoji = f"{perf_emoji} {display_name}"
+               
+                fig.add_trace(go.Scatter(
+                    x=data.index,
+                    y=stock_normalized,
+                    mode='lines',
+                    name=display_name_with_emoji if len(display_name_with_emoji) <= 55 else f"{perf_emoji} {stock} - {company_name[:35]}...",
+                    line=dict(color=color, width=2),
+                    hovertemplate=f'<b>{display_name}</b><br>Rendimiento: {stock_performance:.2f}%<br>Fecha: %{{x}}<br>Base 100: %{{y:.2f}}<extra></extra>'
+                ))
+   
+    # Configurar el layout del gráfico - MEJORADO para evitar superposición
+    # Contar cuántas líneas se están mostrando para ajustar la leyenda
+    total_traces = len(fig.data)
+    legend_height = min(0.95, max(0.3, total_traces * 0.04))
+    
+    # Determinar título dinámico según filtros
+    title_parts = []
+    if show_index:
+        title_parts.append("Índice")
+    if show_above:
+        title_parts.append("Superiores")
+    if show_below:
+        title_parts.append("Inferiores")
+    
+    if not title_parts:
+        title_suffix = "Sin datos seleccionados"
     else:
-        fecha_inicio = st.date_input("Fecha inicial", value=fecha_fin - timedelta(days=365))
-
-# Validaciones
-if fecha_inicio >= fecha_fin:
-    st.error("❌ La fecha de inicio debe ser anterior a la fecha de fin.")
-    st.stop()
-
-tickers = sorted(set(tickers_seleccionados))
-if not tickers:
-    st.warning("⚠️ Selecciona al menos un activo.")
-    st.stop()
-
-# --- Carga de datos mejorada ---
-with st.spinner("Cargando datos..."):
-    data, errores = cargar_datos_avanzado(tuple(tickers), fecha_inicio, fecha_fin)
-
-# Mostrar errores si los hay
-if errores:
-    with st.sidebar.expander(f"⚠️ Errores de carga ({len(errores)})"):
-        for ticker, error in errores.items():
-            st.write(f"**{ticker}**: {error}")
-
-if data.empty:
-    st.error("❌ No se pudieron cargar datos. Verifica los tickers.")
-    st.stop()
-
-# --- Dashboard según tipo de análisis ---
-if tipo_analisis == "Dashboard Completo":
-    # --- Gráfico principal mejorado ---
-    st.subheader("📊 Evolución de Activos")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        tipo_grafico = st.selectbox("Tipo", ["Normalizado (Base 100)", "Precios Absolutos", "Rendimientos"])
-    with col2:
-        escala_log = st.checkbox("Escala logarítmica", False)
-    with col3:
-        mostrar_volumen = st.checkbox("Mostrar señales", False)
-    
-    # Preparar datos según tipo
-    if tipo_grafico == "Normalizado (Base 100)":
-        data_plot = data / data.iloc[0] * 100
-        ylabel = "Rendimiento (Base 100)"
-    elif tipo_grafico == "Rendimientos":
-        data_plot = data.pct_change().cumsum() * 100
-        ylabel = "Rendimiento Acumulado (%)"
-    else:
-        data_plot = data
-        ylabel = "Precio"
-    
-    fig = px.line(
-        data_plot, 
-        x=data_plot.index, 
-        y=data_plot.columns,
-        title=f"Evolución de activos - {tipo_grafico}"
-    )
+        title_suffix = " + ".join(title_parts)
     
     fig.update_layout(
-        height=600,
-        yaxis_type="log" if escala_log else "linear",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        title=dict(
+            text=f'Comparativa Base 100: {selected_index} - {title_suffix} ({selected_period_text})',
+            x=0.5,  # Centrar el título
+            xanchor='center'
+        ),
+        xaxis_title='Fecha',
+        yaxis_title='Rendimiento Base 100',
+        hovermode='x unified',
+        height=700,  # Aumentar altura para dar más espacio
+        showlegend=True if total_traces > 0 else False,
+        legend=dict(
+            orientation="v",  # Leyenda vertical
+            yanchor="top",
+            y=legend_height,
+            xanchor="left",
+            x=1.01,  # Posicionar fuera del área del gráfico
+            bgcolor="rgba(255,255,255,0.9)",
+            bordercolor="rgba(0,0,0,0.3)",
+            borderwidth=1
+        ),
+        margin=dict(l=50, r=250, t=80, b=50)  # Más espacio a la derecha para leyenda más ancha
     )
     
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # --- Métricas avanzadas ---
-    st.subheader("📈 Análisis de Riesgo y Rendimiento")
-    metricas_df = calcular_metricas_avanzadas(data)
-    
-    if not metricas_df.empty:
-        # Mostrar tabla con formato condicional
-        st.dataframe(
-            metricas_df.set_index("Activo").style
-            .background_gradient(cmap="RdYlGn", subset=["Retorno Total (%)", "Sharpe", "Calmar"])
-            .background_gradient(cmap="RdYlGn_r", subset=["Volatilidad (%)", "Max Drawdown (%)", "VaR 95% (%)"])
-            .format({
-                "Retorno Total (%)": "{:.2f}%",
-                "Retorno Anual (%)": "{:.2f}%",
-                "Volatilidad (%)": "{:.2f}%",
-                "Max Drawdown (%)": "{:.2f}%",
-                "VaR 95% (%)": "{:.2f}%"
-            }),
-            use_container_width=True
+    # Mostrar mensaje si no hay datos seleccionados
+    if total_traces == 0:
+        fig.add_annotation(
+            text="No hay datos seleccionados para mostrar<br>Activa al menos una opción arriba",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16, color="gray"),
+            align="center"
         )
-
-elif tipo_analisis == "Detección de Anomalías":
-    st.subheader("🚨 Detección de Anomalías")
+   
+    st.plotly_chart(fig, use_container_width=True)
+   
+    # ANÁLISIS DE RENDIMIENTO - Ahora debajo del gráfico
+    st.markdown("---")
+    st.markdown("## 📈 Análisis de Rendimiento vs Índice")
     
-    anomalias = detectar_anomalias(data, ventana=ventana_volatilidad, threshold=threshold_anomalias)
-    
-    if anomalias:
-        for activo, info in anomalias.items():
-            with st.expander(f"🔍 Anomalías en {activo} ({len(info['fechas'])} detectadas)"):
-                anomalias_df = pd.DataFrame({
-                    'Fecha': info['fechas'],
-                    'Rendimiento (%)': [f"{x*100:.2f}%" for x in info['valores']],
-                    'Z-Score': [f"{x:.2f}" for x in info['z_scores']]
-                })
-                st.dataframe(anomalias_df, use_container_width=True)
-                
-                # Gráfico de la serie con anomalías marcadas
-                serie = data[activo].dropna()
-                returns = serie.pct_change().dropna()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=returns.index, 
-                    y=returns*100,
-                    mode='lines',
-                    name=f'Rendimientos {activo}',
-                    line=dict(color='blue', width=1)
-                ))
-                
-                # Marcar anomalías
-                fig.add_trace(go.Scatter(
-                    x=info['fechas'],
-                    y=[x*100 for x in info['valores']],
-                    mode='markers',
-                    name='Anomalías',
-                    marker=dict(color='red', size=8, symbol='x')
-                ))
-                
-                fig.update_layout(
-                    title=f"Rendimientos y anomalías - {activo}",
-                    xaxis_title="Fecha",
-                    yaxis_title="Rendimiento (%)",
-                    height=400
-                )
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info(f"✅ No se detectaron anomalías con umbral Z-score > {threshold_anomalias}")
-
-elif tipo_analisis == "Regímenes de Volatilidad":
-    st.subheader("📊 Análisis de Regímenes de Volatilidad")
-    
-    regimenes = analisis_regimenes(data, ventana=ventana_volatilidad)
-    
-    # Resumen de regímenes actuales
-    col1, col2, col3 = st.columns(3)
-    regimenes_actuales = {"Baja Volatilidad": 0, "Volatilidad Media": 0, "Alta Volatilidad": 0}
-    
-    for activo, info in regimenes.items():
-        regimen_actual = info['actual']
-        if regimen_actual in regimenes_actuales:
-            regimenes_actuales[regimen_actual] += 1
+    # Separar empresas por encima y debajo del índice
+    above_index = []
+    below_index = []
+   
+    for stock, performance in stocks_performance.items():
+        if performance > index_performance:
+            above_index.append((stock, performance))
+        else:
+            below_index.append((stock, performance))
+   
+    # Ordenar por rendimiento
+    above_index.sort(key=lambda x: x[1], reverse=True)
+    below_index.sort(key=lambda x: x[1], reverse=True)
+   
+    # Crear tres columnas para mejor organización
+    col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        st.metric("🟢 Baja Volatilidad", regimenes_actuales["Baja Volatilidad"])
+        # Mostrar índice de referencia
+        st.markdown("### 📊 Índice de Referencia")
+        st.markdown(f"**{selected_index}**")
+        st.markdown(f"Rendimiento: **{index_performance:.2f}%**")
+        
+        # Estadísticas adicionales
+        st.markdown("### 📊 Estadísticas Generales")
+        st.markdown(f"**Empresas analizadas**: {len(stocks_performance)}")
+        st.markdown(f"**Por encima del índice**: {len(above_index)}")
+        st.markdown(f"**Por debajo del índice**: {len(below_index)}")
+       
+        if stocks_performance:
+            avg_performance = np.mean(list(stocks_performance.values()))
+            st.markdown(f"**Rendimiento promedio**: {avg_performance:.2f}%")
+            best_performance = max(stocks_performance.values())
+            worst_performance = min(stocks_performance.values())
+            st.markdown(f"**Mejor rendimiento**: {best_performance:.2f}%")
+            st.markdown(f"**Peor rendimiento**: {worst_performance:.2f}%")
+    
     with col2:
-        st.metric("🟡 Volatilidad Media", regimenes_actuales["Volatilidad Media"])
+        # Mostrar empresas por encima del índice
+        st.markdown("### 🟢 Por Encima del Índice")
+        if above_index:
+            for stock, perf in above_index:
+                company_name = company_names.get(stock, stock)
+                diff = perf - index_performance
+                # Truncar nombre de empresa si es muy largo
+                display_company = company_name if len(company_name) <= 30 else f"{company_name[:27]}..."
+                st.markdown(f"**{stock}** - {display_company}")
+                st.markdown(f"🔹 {perf:.2f}% (✅ +{diff:.2f}%)")
+                st.markdown("")
+        else:
+            st.markdown("*No hay empresas por encima del índice*")
+    
     with col3:
-        st.metric("🔴 Alta Volatilidad", regimenes_actuales["Alta Volatilidad"])
-    
-    # Gráficos por activo
-    for activo, info in regimenes.items():
-        with st.expander(f"📈 {activo} - Régimen actual: {info['actual']}"):
-            fig = make_subplots(
-                rows=2, cols=1,
-                subplot_titles=(f'Precio de {activo}', 'Volatilidad Móvil y Régimen'),
-                shared_xaxis=True,
-                vertical_spacing=0.1
-            )
-            
-            # Precio
-            fig.add_trace(
-                go.Scatter(x=data.index, y=data[activo], name=f'Precio {activo}'),
-                row=1, col=1
-            )
-            
-            # Volatilidad con colores por régimen
-            vol_data = info['volatilidad'].dropna()
-            regimen_data = info['regimen'].dropna()
-            
-            colors = {'Baja Volatilidad': 'green', 'Volatilidad Media': 'orange', 'Alta Volatilidad': 'red'}
-            for regimen in colors.keys():
-                mask = regimen_data == regimen
-                if mask.any():
-                    fig.add_trace(
-                        go.Scatter(
-                            x=vol_data[mask].index,
-                            y=vol_data[mask],
-                            mode='markers',
-                            name=regimen,
-                            marker=dict(color=colors[regimen], size=4)
-                        ),
-                        row=2, col=1
-                    )
-            
-            fig.update_layout(height=500, showlegend=True)
-            fig.update_xaxes(title_text="Fecha", row=2, col=1)
-            fig.update_yaxes(title_text="Precio", row=1, col=1)
-            fig.update_yaxes(title_text="Volatilidad (%)", row=2, col=1)
-            
-            st.plotly_chart(fig, use_container_width=True)
+        # Mostrar empresas por debajo del índice
+        st.markdown("### 🔴 Por Debajo del Índice")
+        if below_index:
+            for stock, perf in below_index:
+                company_name = company_names.get(stock, stock)
+                diff = perf - index_performance
+                # Truncar nombre de empresa si es muy largo
+                display_company = company_name if len(company_name) <= 30 else f"{company_name[:27]}..."
+                st.markdown(f"**{stock}** - {display_company}")
+                st.markdown(f"🔹 {perf:.2f}% (❌ {diff:.2f}%)")
+                st.markdown("")
+        else:
+            st.markdown("*No hay empresas por debajo del índice*")
 
-# --- Footer con información adicional ---
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📊 Métricas explicadas")
-st.sidebar.markdown("""
-**Sharpe Ratio**: Rendimiento ajustado por riesgo
-**Calmar Ratio**: Rendimiento anual / Max Drawdown  
-**VaR 95%**: Pérdida máxima esperada 95% del tiempo
-**Skewness**: Asimetría de los rendimientos
-**Kurtosis**: "Cola" de la distribución
-""")
+else:
+    # Mostrar instrucciones iniciales solo si no hay datos cargados
+    if not st.session_state.get('data_loaded', False):
+        # Mostrar instrucciones iniciales
+        st.markdown("""
+        ## 👋 Bienvenido al Dashboard de Comparativa de Acciones
+       
+        ### 📋 Instrucciones:
+        1. **Selecciona un índice** en el panel izquierdo
+        2. **Elige el período** de análisis (3, 6, 12 o 24 meses)
+        3. **Presiona "Procesar"** para generar el análisis
+       
+        ### 📈 Funcionalidades:
+        - **Gráfico comparativo** con base 100 desde el inicio del período
+        - **Índice de referencia** en línea negra gruesa punteada
+        - **Empresas individuales** en diferentes colores
+        - **Lista de empresas** por encima y debajo del índice
+        - **Estadísticas** de rendimiento relativo
+       
+        ### 🎯 Objetivo:
+        Identificar empresas que están **atrasadas** o **adelantadas** respecto a su índice de referencia para detectar oportunidades de inversión.
+        """)
+       
+        # Mostrar información de los índices disponibles
+        st.markdown("### 📊 Índices Disponibles:")
+        for index_name, index_info in indices_data.items():
+            with st.expander(f"{index_name} ({index_info['symbol']})"):
+                st.write(f"**Top 20 empresas**: {', '.join(index_info['stocks'][:10])}...")
 
-# Mostrar información del dataset
-st.sidebar.markdown("---")
-st.sidebar.info(f"""
-📈 **Datos cargados:**
-- Activos: {len(data.columns)}
-- Período: {fecha_inicio} a {fecha_fin}
-- Observaciones: {len(data)}
-""")
+# Footer
+st.markdown("---")
+if st.session_state.get('data_loaded', False):
+    if st.button("🔄 Cargar Nuevos Datos", type="secondary"):
+        # Limpiar el estado para permitir nueva carga
+        for key in ['data_loaded', 'index_data', 'stocks_data', 'stocks_performance', 
+                   'company_names', 'index_performance', 'selected_index', 'selected_period_text']:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
 
-# --- Descarga de datos mejorada ---
-if not data.empty:
-    @st.cache_data
-    def preparar_descarga(df, metricas_df=None):
-        output = {}
-        output['precios'] = df.to_csv().encode("utf-8")
-        if metricas_df is not None and not metricas_df.empty:
-            output['metricas'] = metricas_df.to_csv(index=False).encode("utf-8")
-        return output
-    
-    archivos = preparar_descarga(data, calcular_metricas_avanzadas(data) if 'metricas_df' in locals() else None)
-    
-    st.sidebar.download_button(
-        label="📥 Descargar precios (CSV)",
-        data=archivos['precios'],
-        file_name=f"precios_macro_{date.today()}.csv",
-        mime="text/csv"
-    )
-    
-    if 'metricas' in archivos:
-        st.sidebar.download_button(
-            label="📊 Descargar métricas (CSV)",
-            data=archivos['metricas'],
-            file_name=f"metricas_macro_{date.today()}.csv",
-            mime="text/csv"
-        )
+st.markdown("💡 **Nota**: Los datos se obtienen de Yahoo Finance y pueden tener un retraso de hasta 15 minutos.")
