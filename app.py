@@ -144,7 +144,7 @@ with tab1:
 
     # Selección de período (radio buttons)
     period_options = {
-        "24 meses": 24,
+#        "24 meses": 24,
         "12 meses": 12,
         "6 meses": 6,
         "3 meses": 3
@@ -517,7 +517,7 @@ with tab2:
     with col_period:
         # Selección de período para sectores
         sector_period_options = {
-            "24 meses": 24,
+#            "24 meses": 24,
             "12 meses": 12,
             "6 meses": 6,
             "3 meses": 3
